@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secondbrain"
+version = "0.1.0"
+description = "冻结主模型 + 可插拔旁路网络（第二大脑）"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "transformers>=4.40", "peft>=0.10"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+brain = "secondbrain.cli:main"
+
+[tool.setuptools]
+packages = ["secondbrain"]
