@@ -4,3 +4,7 @@ __pycache__/
 *.brain
 *.lora
 runs/
+data/raw/
+data/law_*.jsonl
+data/general_*.jsonl
+results/*.jsonl
