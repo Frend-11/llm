@@ -14,6 +14,7 @@ if [ -f "$OUT/$name.json" ]; then echo "跳过已完成: $name"; exit 0; fi
 need_cuda || exit 1
 w="$OUT/$name.$method"; flag=--brain; [ "$method" = lora ] && flag=--lora
 log="$OUT/$name.log"; : > "$log"
+echo "$*" > "$OUT/$name.args"   # 记下训练参数，供 pick_best.py 选出最优配置后复用
 bs=$BS; accum=$ACCUM
 while :; do
   echo "=== $name (bs=$bs accum=$accum) ===" | tee -a "$log"
