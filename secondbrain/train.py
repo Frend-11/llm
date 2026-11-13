@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
 
 import torch
 
-from .brain import BrainConfig, BrainedModel
-from .common import add_lora, collate, dataset_loss, encode, load_base, lora_state, pick_device, read_jsonl
+from .brain import BrainConfig, BrainedModel, SideBrain, find_layers
+from .common import add_lora, collate, dataset_loss, encode, load_base, lora_rank_for, lora_state, pick_device, read_jsonl
 
 
 def run(a):
@@ -17,6 +18,12 @@ def run(a):
     tok, base = load_base(a.base, device)
 
     if a.method == "lora":
+        if a.lora_r <= 0:  # 自动取秩：与同样参数下的第二大脑参数量对齐
+            ref = BrainConfig(d_model=base.config.hidden_size, n_base_layers=len(find_layers(base)), d_side=a.d_side,
+                              n_heads=a.n_heads, n_taps=a.n_taps, mlp_ratio=a.mlp_ratio, norm_in=not a.no_norm_in,
+                              rel_write=not a.abs_write)
+            a.lora_r = lora_rank_for(base, sum(p.numel() for p in SideBrain(ref).parameters()))
+            print(f"LoRA 秩自动取 {a.lora_r}")
         base = add_lora(base, a.lora_r).to(device)
         model = BrainedModel(base, cfg=BrainConfig(n_taps=0))
         params = [p for n, p in base.named_parameters() if "lora_" in n]
@@ -24,7 +31,8 @@ def run(a):
             p.requires_grad_(True)
     else:
         cfg = BrainConfig(d_side=a.d_side, n_heads=a.n_heads, n_taps=a.n_taps, mlp_ratio=a.mlp_ratio,
-                          norm_in=not a.no_norm_in,
+                          norm_in=not a.no_norm_in, rel_write=not a.abs_write,
+                          write_scale=a.write_scale if a.write_scale > 0 else a.d_side ** -0.5,
                           taps=[int(x) for x in a.taps.split(",")] if a.taps else [],
                           use_inject=not a.no_inject, use_logit=not a.no_logit)
         model = BrainedModel(base, cfg=cfg)
@@ -33,7 +41,10 @@ def run(a):
     n_params = sum(p.numel() for p in params)
     print(f"可训练参数: {n_params / 1e6:.2f}M  (主模型 {sum(p.numel() for p in base.parameters()) / 1e6:.0f}M 冻结)")
 
-    data = [encode(tok, r["messages"], a.max_len, a.system) for r in read_jsonl(a.data)]
+    rows = read_jsonl(a.data)
+    if a.limit:
+        rows = rows[: a.limit]
+    data = [encode(tok, r["messages"], a.max_len, a.system) for r in rows]
     if a.val:
         val = [encode(tok, r["messages"], a.max_len, a.system) for r in read_jsonl(a.val)]
     else:
@@ -42,7 +53,7 @@ def run(a):
         val, data = data[:k], data[k:]
     print(f"训练 {len(data)} 条，验证 {len(val)} 条")
 
-    lr = a.lr or (2e-4 if a.method == "lora" else 1e-3)
+    lr = a.lr or (2e-4 if a.method == "lora" else 3e-4)
     opt = torch.optim.AdamW(params, lr=lr, weight_decay=0.01)
     steps = max(1, a.epochs * math.ceil(len(data) / (a.batch_size * a.accum)))
     warm = max(1, int(0.05 * steps))
@@ -78,7 +89,14 @@ def run(a):
                 save()
         else:
             save()
-    msg = f"已保存 -> {a.out}  训练用时 {time.time() - t0:.0f}s"
-    if torch.cuda.is_available():
-        msg += f"  显存峰值 {torch.cuda.max_memory_allocated() / 2**30:.2f} GB"
+    info = {"method": a.method, "base": a.base, "trainable_params_M": round(n_params / 1e6, 3), "lr": lr,
+            "epochs": a.epochs, "steps": step, "batch_size": a.batch_size, "accum": a.accum, "train_examples": len(data),
+            "best_val_loss": round(best, 4) if val else None, "seconds": round(time.time() - t0),
+            "peak_vram_GB": round(torch.cuda.max_memory_allocated() / 2**30, 2) if torch.cuda.is_available() else None,
+            "lora_r": a.lora_r if a.method == "lora" else None}
+    with open(a.out + ".train.json", "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False, indent=2)
+    msg = f"已保存 -> {a.out}  训练用时 {info['seconds']}s"
+    if info["peak_vram_GB"] is not None:
+        msg += f"  显存峰值 {info['peak_vram_GB']} GB"
     print(msg)

@@ -43,6 +43,8 @@ def run(a):
             out.update(base_loss=round(off, 4), delta=round(with_ - off, 4))
         return out
 
+    if a.brain:
+        report["brain_config"] = {k: v for k, v in vars(model.brain.cfg).items() if k not in ("base_name",)}
     if a.role:
         report["role"] = losses(a.role)
     if a.general:

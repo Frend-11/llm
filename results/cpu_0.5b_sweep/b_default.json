@@ -1,0 +1,21 @@
+{
+  "base": "Qwen/Qwen2.5-0.5B-Instruct",
+  "brain": "results/cpu_0.5b_sweep/b_default.brain",
+  "lora": null,
+  "alpha": 1.0,
+  "gate": 1.0,
+  "system": null,
+  "extra_params_M": 7.733,
+  "role": {
+    "loss": 1.6161,
+    "ppl": 5.034,
+    "base_loss": 1.6449,
+    "delta": -0.0288
+  },
+  "general": {
+    "loss": 1.9738,
+    "ppl": 7.198,
+    "base_loss": 1.8502,
+    "delta": 0.1235
+  }
+}

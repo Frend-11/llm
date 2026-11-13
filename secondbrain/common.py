@@ -9,7 +9,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .brain import BrainConfig, BrainedModel, SideBrain
 
-LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "c_attn"]
+# 注意力层的投影矩阵；后三个是 Qwen3.5 线性注意力层（Gated DeltaNet）里对应的投影
+LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "c_attn", "in_proj_qkv", "in_proj_z", "out_proj"]
 
 
 def pick_device(device: str | None = None) -> str:
@@ -26,10 +27,24 @@ def load_base(name: str, device: str):
     return tok, base.to(device)
 
 
+def lora_targets(base) -> list[str]:
+    names = {n.split(".")[-1] for n, _ in base.named_modules()}
+    return [t for t in LORA_TARGETS if t in names]
+
+
+def lora_rank_for(base, n_params: int) -> int:
+    """让 LoRA 的参数量尽量接近 n_params 的秩（用于和第二大脑做同等参数量对比）。"""
+    targets = set(lora_targets(base))
+    per_rank = 0
+    for n, m in base.named_modules():
+        if n.split(".")[-1] in targets and hasattr(m, "weight") and m.weight.dim() == 2:
+            per_rank += m.weight.shape[0] + m.weight.shape[1]
+    return max(1, round(n_params / max(per_rank, 1)))
+
+
 def add_lora(base, r: int, alpha: int | None = None):
     from peft import LoraConfig, inject_adapter_in_model
-    names = {n.split(".")[-1] for n, _ in base.named_modules()}
-    targets = [t for t in LORA_TARGETS if t in names]
+    targets = lora_targets(base)
     base = inject_adapter_in_model(LoraConfig(r=r, lora_alpha=alpha or 2 * r, target_modules=targets), base)
     for n, p in base.named_parameters():
         if "lora_" in n:  # 主模型可以是 bf16，LoRA 权重始终用 float32（训练与推理一致）
@@ -67,8 +82,8 @@ def read_jsonl(path: str) -> list[dict]:
 def render_prompt(tok, messages: list[dict], system: str | None = None) -> str:
     if system and not (messages and messages[0]["role"] == "system"):
         messages = [{"role": "system", "content": system}] + messages
-    if tok.chat_template:
-        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    if tok.chat_template:  # enable_thinking=False：Qwen3 / Qwen3.5 关闭思考模式，其它模板会忽略这个参数
+        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
     return "".join(f"<{m['role']}>{m['content']}\n" for m in messages) + "<assistant>"
 
 

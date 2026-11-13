@@ -26,7 +26,8 @@ def randomize(model):  # 让门控和输出投影离开零点，否则测不到�
         model.brain.up_out.weight.normal_(std=0.1)
 
 
-VARIANTS = [{}, {"norm_in": True}, {"norm_in": True, "mlp_ratio": 0}]
+V2 = {"norm_in": True, "rel_write": True, "write_scale": 0.25}   # 新结构：归一化读入 + 相对写入
+VARIANTS = [{}, {"norm_in": True}, {"norm_in": True, "mlp_ratio": 0}, V2]
 
 
 @pytest.mark.parametrize("extra", VARIANTS)
@@ -73,7 +74,8 @@ def test_causal():
 
 
 @pytest.mark.parametrize("flags", [{}, {"use_inject": False}, {"use_logit": False}, {"norm_in": True},
-                                   {"norm_in": True, "mlp_ratio": 0}])
+                                   {"norm_in": True, "mlp_ratio": 0}, V2, {**V2, "use_inject": False},
+                                   {**V2, "use_logit": False}])
 def test_training_only_touches_brain(flags):
     base = tiny()
     before = [p.clone() for p in base.parameters()]
@@ -110,7 +112,7 @@ def test_old_checkpoint_without_new_config_keys(tmp_path):
     ref = model(ids)[0]
     model.brain.save(tmp_path / "x.brain")
     ckpt = torch.load(tmp_path / "x.brain", weights_only=True)
-    for k in ("norm_in", "mlp_ratio"):
+    for k in ("norm_in", "mlp_ratio", "write_scale", "rel_write"):
         ckpt["config"].pop(k)
     torch.save(ckpt, tmp_path / "old.brain")
     again = BrainedModel(tiny(), brain=SideBrain.load(tmp_path / "old.brain")).eval()
@@ -131,7 +133,7 @@ def test_half_precision_base(device, method):
     ids = torch.randint(0, V, (2, 10), device=device)
     ref = base(ids).logits
     if method == "brain":
-        model = BrainedModel(base, cfg=BrainConfig(d_side=16, n_heads=2, n_taps=2, norm_in=True))
+        model = BrainedModel(base, cfg=BrainConfig(d_side=16, n_heads=2, n_taps=2, **V2))
         params = list(model.brain.parameters())
     else:
         model = BrainedModel(add_lora(base, 4), cfg=BrainConfig(n_taps=0))
@@ -148,6 +150,25 @@ def test_half_precision_base(device, method):
         loss.backward(); opt.step(); opt.zero_grad()
     assert loss.item() < first - 0.2
     assert len(list(model.eval().generate(ids[:1], max_new_tokens=3))) == 3
+
+
+def test_relative_write_is_scale_invariant():
+    """把主模型某一层的输出整体放大 50 倍，相对写入的大脑引起的相对改变量应保持同一量级。"""
+    def rel_change(scale):
+        base = tiny()
+        layer = base.transformer.h[1]
+        layer.register_forward_hook(lambda m, i, o: (o[0] * scale, *o[1:]) if isinstance(o, tuple) else o * scale)
+        model = BrainedModel(base, cfg=BrainConfig(d_side=16, n_heads=2, taps=[1], use_logit=False, **V2)).eval()
+        randomize(model)
+        seen = {}
+        base.transformer.h[2].register_forward_pre_hook(lambda m, args: seen.setdefault("h", args[0]))
+        ids = torch.randint(0, V, (1, 8))
+        model(ids); with_brain = seen.pop("h")
+        model.gate_scale = 0.0
+        model(ids); without = seen.pop("h")
+        return ((with_brain - without).norm() / without.norm()).item()
+    a, b = rel_change(1.0), rel_change(50.0)
+    assert a > 1e-4 and 0.5 < a / b < 2.0
 
 
 def test_rouge_l():

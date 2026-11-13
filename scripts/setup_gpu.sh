@@ -12,6 +12,17 @@ else
   .venv/bin/pip install -q -U pip
   .venv/bin/pip install -q -e ".[dev]"
 fi
+# 驱动较旧时 PyPI 上默认的 CUDA 版本可能用不了：依次换成较老 CUDA 版本的 PyTorch 再试
+for idx in https://download.pytorch.org/whl/cu128 https://download.pytorch.org/whl/cu126; do
+  .venv/bin/python -c "import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null && break
+  command -v nvidia-smi >/dev/null 2>&1 || break   # 没有显卡驱动就不用折腾了
+  echo "当前 PyTorch 用不了显卡，改从 $idx 安装"
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --python .venv/bin/python --reinstall torch --index-url "$idx" || true
+  else
+    .venv/bin/pip install -q --force-reinstall torch --index-url "$idx" || true
+  fi
+done
 .venv/bin/python - <<'PY'
 import sys
 import torch

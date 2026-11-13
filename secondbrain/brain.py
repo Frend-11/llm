@@ -1,9 +1,12 @@
 """第二大脑：挂在冻结主模型旁边的可插拔旁路网络。
 
 三条通路：
-  读   —— 在选定的层 (tap) 读取主模型隐状态  h_l
-  写   —— 门控回注  h_l' = h_l + gate_scale * g_l * up_l(s_l)
-  解码 —— logit 融合 logits = logits_base + alpha * lm_head(up_out(s_final))
+  读   —— 在选定的层 (tap) 读取主模型隐状态  h_l（norm_in 时先做 LayerNorm）
+  写   —— 门控回注  h_l' = h_l + gate_scale * c * r(h_l) * g_l * up_l(s_l)
+  解码 —— logit 融合 logits = logits_base + alpha * c * lm_head(r(h_f) * up_out(s_final))
+  c = write_scale，训练前定好的常数，控制写通路每一步更新的幅度（作用类似 LoRA 的 alpha/r）。
+  r(h) 是该位置隐状态的均方根（rel_write 时启用，否则为 1；h_f 是送入 lm_head 的末层隐状态）：
+  不同模型、不同层的隐状态数值尺度能差两个数量级，按相对幅度写入后同一套超参才能通用。
 
 up_l 与 up_out 均为零初始化（g_l 是初值为 1 的可学习逐层标量），所以刚挂载时输出与原模型逐位一致。
 alpha / gate_scale 是推理期旋钮，不参与训练，可在调用时随意调节。
@@ -27,6 +30,8 @@ class BrainConfig:
     n_taps: int = 6
     mlp_ratio: int = 4               # 旁路块里 MLP 的扩张倍数；0 = 不要 MLP（只留注意力）
     norm_in: bool = False            # 读入前先对主模型隐状态做 LayerNorm（train 命令默认打开；旧 .brain 文件没有它）
+    write_scale: float = 1.0         # 写通路（回注与解码融合）的固定缩放，作用类似 LoRA 的 alpha/r
+    rel_write: bool = False          # 写入量按所在位置隐状态的均方根缩放，并在写出前对旁路状态做 LayerNorm
     use_inject: bool = True          # 消融：隐层回注通路
     use_logit: bool = True           # 消融：logit 融合通路
     base_name: str = ""
@@ -82,6 +87,7 @@ class SideBrain(nn.Module):
         self.ln_in = nn.ModuleList(nn.LayerNorm(cfg.d_model) for _ in range(n)) if cfg.norm_in else None
         self.down = nn.ModuleList(nn.Linear(cfg.d_model, cfg.d_side) for _ in range(n))
         self.blocks = nn.ModuleList(SideBlock(cfg.d_side, cfg.n_heads, cfg.mlp_ratio) for _ in range(n))
+        self.ln_w = nn.ModuleList(nn.LayerNorm(cfg.d_side) for _ in range(n)) if cfg.rel_write else None
         self.up = nn.ModuleList(nn.Linear(cfg.d_side, cfg.d_model, bias=False) for _ in range(n))
         self.gates = nn.Parameter(torch.ones(n))           # 逐层可学习的回注强度
         self.ln_out = nn.LayerNorm(cfg.d_side)
@@ -99,6 +105,11 @@ class SideBrain(nn.Module):
         brain = cls(BrainConfig(**ckpt["config"]))
         brain.load_state_dict(ckpt["state"])
         return brain
+
+
+def _rms(h: torch.Tensor) -> torch.Tensor:
+    """每个位置隐状态的均方根（不回传梯度，只当尺度用）。"""
+    return h.detach().float().pow(2).mean(-1, keepdim=True).sqrt()
 
 
 def find_layers(base: nn.Module) -> nn.ModuleList:
@@ -136,8 +147,15 @@ class BrainedModel(nn.Module):
         self._s = None
         self._cache_in = None
         self._cache_out = None
+        self._hf = None
         for i, l in enumerate(brain.taps):
             layers[l].register_forward_hook(self._make_hook(i))
+        if brain.taps and brain.cfg.rel_write:  # 记下送入 lm_head 的末层隐状态，用来给解码融合定尺度
+            base.get_output_embeddings().register_forward_pre_hook(self._capture_head_input)
+
+    def _capture_head_input(self, _module, args):
+        if self._cache_out is not None and self._hf is None:  # 只记主模型自己的那一次调用
+            self._hf = args[0]
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -161,7 +179,11 @@ class BrainedModel(nn.Module):
             self._cache_out.append(kv)
             if not b.cfg.use_inject or self.gate_scale == 0:
                 return None
-            h = h + (self.gate_scale * b.gates[i] * b.up[i](self._s)).to(h.dtype)
+            if b.cfg.rel_write:
+                delta = b.up[i](b.ln_w[i](self._s)) * _rms(h)
+            else:
+                delta = b.up[i](self._s)
+            h = h + (self.gate_scale * b.cfg.write_scale * b.gates[i] * delta).to(h.dtype)
             return (h, *out[1:]) if isinstance(out, tuple) else h
         return hook
 
@@ -169,7 +191,7 @@ class BrainedModel(nn.Module):
         """past = (主模型 past_key_values, 旁路 KV 缓存)，用于增量解码。
         返回 (logits, loss, past)。训练时请使用右侧 padding。"""
         base_past, self._cache_in = past if past is not None else (None, None)
-        self._s, self._cache_out = None, []
+        self._s, self._cache_out, self._hf = None, [], None
         try:
             out = self.base(input_ids=input_ids, attention_mask=attention_mask,
                             past_key_values=base_past, use_cache=not self.training)
@@ -177,10 +199,13 @@ class BrainedModel(nn.Module):
             if self.brain.cfg.use_logit and self.alpha != 0 and self._s is not None:
                 head = self.base.get_output_embeddings()
                 delta = self.brain.up_out(self.brain.ln_out(self._s))
-                logits = logits + self.alpha * head(delta.to(head.weight.dtype)).to(logits.dtype)
+                if self.brain.cfg.rel_write:
+                    delta = delta * _rms(self._hf)
+                scale = self.alpha * self.brain.cfg.write_scale
+                logits = logits + scale * head(delta.to(head.weight.dtype)).to(logits.dtype)
             new_past = (out.past_key_values, self._cache_out)
         finally:
-            self._s, self._cache_in, self._cache_out = None, None, None
+            self._s, self._cache_in, self._cache_out, self._hf = None, None, None, None
         loss = None
         if labels is not None:
             loss = F.cross_entropy(logits[:, :-1].float().flatten(0, 1), labels[:, 1:].flatten(), ignore_index=-100)

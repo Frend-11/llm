@@ -11,7 +11,8 @@ need_cuda
   echo "==== 开始 $(date '+%F %T') ===="
   [ -f data/law_train.jsonl ] || "$PYTHON" scripts/prepare_data.py
   # A. 小模型、1 轮：与云端 CPU 试验同配置（旧结构，不做读入归一化），核对两边结果是否一致
-  BASE=$SMALL OUT=results/gpu_0.5b_pilot BRAIN_ARGS="--no-norm-in" GEN_N=50 bash scripts/run_experiment.sh
+  BASE=$SMALL OUT=results/gpu_0.5b_pilot LORA_R=56 GEN_N=50 \
+    BRAIN_ARGS="--no-norm-in --abs-write --write-scale 1 --lr 1e-3" bash scripts/run_experiment.sh
   # B. 小模型上的结构 / 超参扫描
   BASE=$SMALL OUT=results/sweep_0.5b bash scripts/sweep.sh
   # C. 大一号的模型、3 轮：默认大脑 vs 参数量对齐的 LoRA
