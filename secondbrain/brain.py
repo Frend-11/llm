@@ -209,4 +209,6 @@ class BrainedModel(nn.Module):
             ids = nxt.view(1, 1)
 
     def num_brain_params(self) -> int:
+        if not self.brain.taps:  # 纯包装器（原模型 / LoRA 基线）里的大脑没有接入，不算新增参数
+            return 0
         return sum(p.numel() for p in self.brain.parameters())

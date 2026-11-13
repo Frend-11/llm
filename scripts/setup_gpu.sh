@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if command -v uv >/dev/null 2>&1; then
-  uv venv --allow-existing .venv
+  # 优先用 Python 3.13（代码在这个版本上测试过），装不上就用 uv 找到的默认版本
+  uv venv --allow-existing --python 3.13 .venv || uv venv --allow-existing .venv
   uv pip install --python .venv/bin/python -e ".[dev]"
 else
   python3 -m venv .venv
@@ -12,8 +13,9 @@ else
   .venv/bin/pip install -q -e ".[dev]"
 fi
 .venv/bin/python - <<'PY'
+import sys
 import torch
-print("torch", torch.__version__, "| cuda 可用:", torch.cuda.is_available())
+print("python", sys.version.split()[0], "| torch", torch.__version__, "| cuda 可用:", torch.cuda.is_available())
 if torch.cuda.is_available():
     p = torch.cuda.get_device_properties(0)
     print(p.name, f"{p.total_memory / 2**30:.1f} GB")
@@ -21,3 +23,6 @@ if torch.cuda.is_available():
     print("bf16 矩阵乘法正常:", tuple((x @ x).shape))
 PY
 .venv/bin/python -m pytest -q
+source scripts/_common.sh
+need_cuda
+echo "环境就绪。"

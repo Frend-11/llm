@@ -16,6 +16,7 @@ OUT=${OUT:-results}
 BRAIN_ARGS=${BRAIN_ARGS:-}   # 传给大脑训练的额外参数，如 "--n-taps 24 --d-side 96"
 SYSTEM="你是一名专业的中国法律咨询律师，请依据现行法律法规，准确、严谨地回答当事人的问题。"
 mkdir -p "$OUT"
+need_cuda
 ev() {  # ev <名字> <其余参数...>
   local name=$1; shift
   if [ -f "$OUT/$name.json" ]; then echo "跳过已完成的评测: $name"; return; fi

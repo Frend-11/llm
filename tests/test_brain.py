@@ -186,6 +186,9 @@ def test_cli_end_to_end(tmp_path, capsys):
     main(["eval", *base, "--role", str(data), "--report", str(tmp_path / "base.json")])
     base_loss = json.loads((tmp_path / "base.json").read_text())["role"]["loss"]
     assert abs(base_loss - brain["role"]["base_loss"]) < 1e-3   # alpha=gate=0 等价于原模型
-    assert json.loads((tmp_path / "lora.json").read_text())["role"]["loss"] < base_loss - 0.1
+    lora = json.loads((tmp_path / "lora.json").read_text())
+    assert lora["role"]["loss"] < base_loss - 0.1
+    assert json.loads((tmp_path / "base.json").read_text())["extra_params_M"] == 0   # 原模型没有新增参数
+    assert 0 < lora["extra_params_M"] < brain["extra_params_M"] * 5
     assert len((tmp_path / "gen.jsonl").read_text().strip().splitlines()) == 2
     assert 0.0 <= brain["rouge_l"] <= 1.0 and brain["gen_n"] == 2

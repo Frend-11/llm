@@ -20,12 +20,19 @@ one() {  # one <名字> <brain|lora> <训练参数...>
   echo "=== $name ==="
   local w="$OUT/$name.$method" flag=--brain
   if [ "$method" = lora ]; then flag=--lora; fi
-  brain train --base "$BASE" --data data/law_train.jsonl --out "$w" --method "$method" \
-    --epochs "$EPOCHS" --batch-size "$BS" --accum "$ACCUM" --max-len "$MAXLEN" "$@" 2>&1 | tee "$OUT/$name.log" | grep -E "参数|验证|已保存|Error|error"
-  brain eval --base "$BASE" "$flag" "$w" --role data/law_test.jsonl --general data/general_test.jsonl \
-    --batch-size "$BS" --max-len "$MAXLEN" --gen-n 0 --report "$OUT/$name.json" > /dev/null
+  # 单个配置失败（比如显存不够）不中断整个扫描，完整日志在 $OUT/$name.log
+  if brain train --base "$BASE" --data data/law_train.jsonl --out "$w" --method "$method" \
+       --epochs "$EPOCHS" --batch-size "$BS" --accum "$ACCUM" --max-len "$MAXLEN" "$@" > "$OUT/$name.log" 2>&1 \
+     && brain eval --base "$BASE" "$flag" "$w" --role data/law_test.jsonl --general data/general_test.jsonl \
+       --batch-size "$BS" --max-len "$MAXLEN" --gen-n 0 --report "$OUT/$name.json" >> "$OUT/$name.log" 2>&1; then
+    grep -E "可训练参数|验证 loss|已保存" "$OUT/$name.log" || true
+  else
+    echo "失败: $name（见 $OUT/$name.log）"; FAILED="$FAILED $name"
+  fi
   rm -f "$w"   # 扫描只留指标，不留权重
 }
+FAILED=""
+need_cuda
 
 # --- 第二大脑：默认结构（6 层挂载，宽 256，读入归一化）与学习率 ---
 one b_default        brain
@@ -47,3 +54,4 @@ one l_r56_lr5e-4     lora --lora-r 56 --lr 5e-4
 one l_r16_lr2e-4     lora --lora-r 16
 
 "$PYTHON" scripts/summarize.py "$OUT"
+if [ -n "$FAILED" ]; then echo "失败的配置:$FAILED"; fi
