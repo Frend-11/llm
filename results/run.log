@@ -1,7 +1,0 @@
-[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
-Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:   0%|          | 1/290 [00:00<01:56,  2.47it/s]Loading weights:  84%|████████▍ | 243/290 [00:00<00:00, 630.99it/s]Loading weights: 100%|██████████| 290/290 [00:00<00:00, 517.43it/s]
-taps = [3, 7, 11, 15, 19, 23]
-可训练参数: 7.72M  (主模型 494M 冻结)
-训练 950 条，验证 50 条
-ep 0 step 10/238 loss 1.9698 lr 1.00e-03 70s
-ep 0 step 20/238 loss 1.8529 lr 9.96e-04 142s

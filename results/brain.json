@@ -1,0 +1,23 @@
+{
+  "base": "Qwen/Qwen2.5-0.5B-Instruct",
+  "brain": "results/law.brain",
+  "lora": null,
+  "alpha": 1.0,
+  "gate": 1.0,
+  "system": null,
+  "extra_params_M": 7.723,
+  "role": {
+    "loss": 1.5748,
+    "ppl": 4.83,
+    "base_loss": 1.6449,
+    "delta": -0.0701
+  },
+  "general": {
+    "loss": 1.9357,
+    "ppl": 6.929,
+    "base_loss": 1.8502,
+    "delta": 0.0855
+  },
+  "tokens_per_s": 11.3,
+  "generations": "results/brain.gen.jsonl"
+}

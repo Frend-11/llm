@@ -25,6 +25,8 @@ class BrainConfig:
     n_heads: int = 4
     taps: list[int] = field(default_factory=list)  # 读写的主模型层下标；空 = 均匀取 n_taps 层
     n_taps: int = 6
+    mlp_ratio: int = 4               # 旁路块里 MLP 的扩张倍数；0 = 不要 MLP（只留注意力）
+    norm_in: bool = False            # 读入前先对主模型隐状态做 LayerNorm（train 命令默认打开；旧 .brain 文件没有它）
     use_inject: bool = True          # 消融：隐层回注通路
     use_logit: bool = True           # 消融：logit 融合通路
     base_name: str = ""
@@ -42,14 +44,17 @@ class BrainConfig:
 class SideBlock(nn.Module):
     """带 KV 缓存的因果 pre-norm transformer 块。"""
 
-    def __init__(self, d: int, n_heads: int):
+    def __init__(self, d: int, n_heads: int, mlp_ratio: int = 4):
         super().__init__()
         self.n_heads = n_heads
         self.ln1 = nn.LayerNorm(d)
         self.qkv = nn.Linear(d, 3 * d)
         self.proj = nn.Linear(d, d)
-        self.ln2 = nn.LayerNorm(d)
-        self.mlp = nn.Sequential(nn.Linear(d, 4 * d), nn.GELU(), nn.Linear(4 * d, d))
+        if mlp_ratio > 0:
+            self.ln2 = nn.LayerNorm(d)
+            self.mlp = nn.Sequential(nn.Linear(d, mlp_ratio * d), nn.GELU(), nn.Linear(mlp_ratio * d, d))
+        else:
+            self.mlp = None
 
     def forward(self, x, cache=None):
         B, T, D = x.shape
@@ -61,7 +66,8 @@ class SideBlock(nn.Module):
         mask = torch.ones(T, P + T, dtype=torch.bool, device=x.device).tril(diagonal=P)
         a = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         x = x + self.proj(a.transpose(1, 2).reshape(B, T, D))
-        x = x + self.mlp(self.ln2(x))
+        if self.mlp is not None:
+            x = x + self.mlp(self.ln2(x))
         return x, (k, v)
 
 
@@ -73,8 +79,9 @@ class SideBrain(nn.Module):
         self.cfg = cfg
         self.taps = cfg.resolve_taps()
         n = len(self.taps)
+        self.ln_in = nn.ModuleList(nn.LayerNorm(cfg.d_model) for _ in range(n)) if cfg.norm_in else None
         self.down = nn.ModuleList(nn.Linear(cfg.d_model, cfg.d_side) for _ in range(n))
-        self.blocks = nn.ModuleList(SideBlock(cfg.d_side, cfg.n_heads) for _ in range(n))
+        self.blocks = nn.ModuleList(SideBlock(cfg.d_side, cfg.n_heads, cfg.mlp_ratio) for _ in range(n))
         self.up = nn.ModuleList(nn.Linear(cfg.d_side, cfg.d_model, bias=False) for _ in range(n))
         self.gates = nn.Parameter(torch.ones(n))           # 逐层可学习的回注强度
         self.ln_out = nn.LayerNorm(cfg.d_side)
@@ -143,7 +150,10 @@ class BrainedModel(nn.Module):
                 return None
             h = out[0] if isinstance(out, tuple) else out
             b = self.brain
-            x = b.down[i](h.to(b.gates.dtype))
+            x = h.to(b.gates.dtype)
+            if b.ln_in is not None:  # 主模型隐状态各层、各位置的模长差异很大，先归一化再读
+                x = b.ln_in[i](x)
+            x = b.down[i](x)
             if self._s is not None:
                 x = x + self._s
             cache = self._cache_in[i] if self._cache_in is not None else None

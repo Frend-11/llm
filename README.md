@@ -6,7 +6,7 @@
 
 | 通路 | 做法 |
 |---|---|
-| 读 | 在选定的若干层读取主模型隐状态 `h_l`，送入小型因果 transformer 得到 `s_l` |
+| 读 | 在选定的若干层读取主模型隐状态 `h_l`（先做 LayerNorm），送入小型因果 transformer 得到 `s_l` |
 | 写 | 回注：`h_l' = h_l + gate · g_l · up_l(s_l)` |
 | 解码 | logit 融合：`logits = logits_主 + alpha · lm_head(up_out(s_末))`，复用主模型冻结的输出矩阵 |
 
@@ -17,9 +17,31 @@
 ## 安装
 
 ```bash
-pip install -e ".[dev]"
-pytest -q
+bash scripts/setup_gpu.sh   # 在项目里建 .venv，装依赖，检查 CUDA，跑单元测试
+source .venv/bin/activate   # 之后就可以直接用 brain 命令
 ```
+
+不用 uv / 虚拟环境的话，`pip install -e ".[dev]" && pytest -q` 也可以。
+
+## 复现实验
+
+```bash
+python scripts/prepare_data.py   # 下载并切分数据（固定种子）
+bash scripts/run_all.sh          # 首轮全部实验，中断后重跑会续跑；日志在 results/run_all.log
+```
+
+`run_all.sh` 依次做三件事，也可以单独运行：
+
+| 阶段 | 脚本 | 内容 | 结果目录 |
+|---|---|---|---|
+| A | `run_experiment.sh` | 0.5B、1 轮：大脑 / LoRA / 角色提示词 / 原模型，与云端 CPU 试验同配置 | `results/gpu_0.5b_pilot` |
+| B | `sweep.sh` | 0.5B 上的结构与超参扫描（学习率、挂载层数、两条通路的消融、LoRA 的秩和学习率） | `results/sweep_0.5b` |
+| C | `run_experiment.sh` | 1.5B、3 轮：默认大脑 vs 参数量对齐的 LoRA | `results/gpu_1.5b` |
+
+数据来源：
+
+- 岗位集：[DISC-Law-SFT](https://huggingface.co/datasets/ShengbinYue/DISC-Law-SFT) 的法律问答，按问题去重、过滤过长回答后取 1000 条训练、200 条测试。
+- 通用集：[中文 Alpaca-GPT4](https://huggingface.co/datasets/shibing624/alpaca-zh) 的 200 条，只用来衡量通用能力是否下降。
 
 ## 用法
 
@@ -57,6 +79,8 @@ brain train ... --no-inject          # 只保留 logit 融合
 brain train ... --no-logit           # 只保留隐层回注
 brain train ... --taps 20,23,27      # 指定挂载层
 brain train ... --d-side 128 --n-taps 3
+brain train ... --mlp-ratio 0        # 旁路块只留注意力
+brain train ... --no-norm-in         # 读入前不做 LayerNorm
 brain eval  ... --alpha 0.5 --gate 1 # 推理期扫旋钮
 ```
 
@@ -64,6 +88,7 @@ brain eval  ... --alpha 0.5 --gate 1 # 推理期扫旋钮
 
 - `role.loss / ppl`：岗位测试集上的表现。
 - `role.delta`、`general.delta`：同一进程内与关掉大脑的原模型之差。`general.delta > 0` 表示通用能力下降。
+- `rouge_l`：生成结果与参考答案的字符级 ROUGE-L（贪心解码）。只是粗略的自动指标，不能代替量表打分。
 - `extra_params_M`、`tokens_per_s`、`peak_vram_GB`：开销。
 - `gen-out`：生成结果，供岗位适配度量表（专业性、语气、合规性）打分。
 

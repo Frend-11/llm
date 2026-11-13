@@ -7,4 +7,6 @@ runs/
 data/raw/
 data/law_*.jsonl
 data/general_*.jsonl
-results/*.jsonl
+results/**/*.jsonl
+results/**/*.log
+.venv/

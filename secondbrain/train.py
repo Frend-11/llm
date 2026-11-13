@@ -21,9 +21,10 @@ def run(a):
         model = BrainedModel(base, cfg=BrainConfig(n_taps=0))
         params = [p for n, p in base.named_parameters() if "lora_" in n]
         for p in params:
-            p.requires_grad_(True).data = p.data.float()  # LoRA 权重用 float32 训练
+            p.requires_grad_(True)
     else:
-        cfg = BrainConfig(d_side=a.d_side, n_heads=a.n_heads, n_taps=a.n_taps,
+        cfg = BrainConfig(d_side=a.d_side, n_heads=a.n_heads, n_taps=a.n_taps, mlp_ratio=a.mlp_ratio,
+                          norm_in=not a.no_norm_in,
                           taps=[int(x) for x in a.taps.split(",")] if a.taps else [],
                           use_inject=not a.no_inject, use_logit=not a.no_logit)
         model = BrainedModel(base, cfg=cfg)
@@ -77,4 +78,7 @@ def run(a):
                 save()
         else:
             save()
-    print(f"已保存 -> {a.out}")
+    msg = f"已保存 -> {a.out}  训练用时 {time.time() - t0:.0f}s"
+    if torch.cuda.is_available():
+        msg += f"  显存峰值 {torch.cuda.max_memory_allocated() / 2**30:.2f} GB"
+    print(msg)

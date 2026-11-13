@@ -10,6 +10,20 @@ import torch
 from .common import dataset_loss, encode, load_model, read_jsonl, render_prompt
 
 
+def rouge_l(hyp: str, ref: str) -> float:
+    """字符级 ROUGE-L F1（最长公共子序列），对中文不需要分词。"""
+    if not hyp or not ref:
+        return 0.0
+    prev = [0] * (len(ref) + 1)
+    for ch in hyp:
+        cur = [0]
+        for j, r in enumerate(ref):
+            cur.append(prev[j] + 1 if ch == r else max(prev[j + 1], cur[j]))
+        prev = cur
+    lcs = prev[-1]
+    return 2 * lcs / (len(hyp) + len(ref))
+
+
 def run(a):
     tok, model = load_model(a.base, a.brain, a.lora, a.device)
     device = next(model.base.parameters()).device
@@ -34,17 +48,21 @@ def run(a):
     if a.general:
         report["general"] = losses(a.general)  # delta > 0 表示通用能力下降
 
-    if a.role and a.gen_out:
-        rows, n_tok, t0 = read_jsonl(a.role)[: a.gen_n], 0, time.time()
+    if a.role and a.gen_out and a.gen_n > 0:
+        rows, n_tok, t0, scores = read_jsonl(a.role)[: a.gen_n], 0, time.time(), []
         with open(a.gen_out, "w", encoding="utf-8") as f:
             for r in rows:
                 ids = tok(render_prompt(tok, r["messages"][:-1], a.system), add_special_tokens=False,
                           return_tensors="pt")["input_ids"].to(device)
                 out = list(model.generate(ids, a.max_new_tokens, eos_token_id=tok.eos_token_id))
                 n_tok += len(out)
-                f.write(json.dumps({"messages": r["messages"][:-1], "reference": r["messages"][-1]["content"],
-                                    "output": tok.decode(out)}, ensure_ascii=False) + "\n")
+                text, ref = tok.decode(out), r["messages"][-1]["content"]
+                scores.append(rouge_l(text, ref))
+                f.write(json.dumps({"messages": r["messages"][:-1], "reference": ref, "output": text,
+                                    "rouge_l": round(scores[-1], 4)}, ensure_ascii=False) + "\n")
         report["tokens_per_s"] = round(n_tok / max(time.time() - t0, 1e-9), 1)
+        report["rouge_l"] = round(sum(scores) / max(len(scores), 1), 4)  # 贪心解码、截断到 max_new_tokens
+        report["gen_n"] = len(scores)
         report["generations"] = a.gen_out
     if device.type == "cuda":
         report["peak_vram_GB"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)

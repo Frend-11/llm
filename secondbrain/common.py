@@ -19,15 +19,22 @@ def pick_device(device: str | None = None) -> str:
 def load_base(name: str, device: str):
     tok = AutoTokenizer.from_pretrained(name)
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    base = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype).to(device)
-    return tok, base
+    try:
+        base = AutoModelForCausalLM.from_pretrained(name, dtype=dtype)
+    except TypeError:  # 旧版 transformers 用 torch_dtype
+        base = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype)
+    return tok, base.to(device)
 
 
 def add_lora(base, r: int, alpha: int | None = None):
     from peft import LoraConfig, inject_adapter_in_model
     names = {n.split(".")[-1] for n, _ in base.named_modules()}
     targets = [t for t in LORA_TARGETS if t in names]
-    return inject_adapter_in_model(LoraConfig(r=r, lora_alpha=alpha or 2 * r, target_modules=targets), base)
+    base = inject_adapter_in_model(LoraConfig(r=r, lora_alpha=alpha or 2 * r, target_modules=targets), base)
+    for n, p in base.named_parameters():
+        if "lora_" in n:  # 主模型可以是 bf16，LoRA 权重始终用 float32（训练与推理一致）
+            p.data = p.data.float()
+    return base
 
 
 def lora_state(model) -> dict:
