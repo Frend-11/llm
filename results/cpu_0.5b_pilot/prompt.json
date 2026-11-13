@@ -1,0 +1,21 @@
+{
+  "base": "Qwen/Qwen2.5-0.5B-Instruct",
+  "brain": null,
+  "lora": null,
+  "alpha": 1.0,
+  "gate": 1.0,
+  "system": "你是一名专业的中国法律咨询律师，请依据现行法律法规，准确、严谨地回答当事人的问题。",
+  "extra_params_M": 0.0,
+  "role": {
+    "loss": 1.6238,
+    "ppl": 5.072
+  },
+  "general": {
+    "loss": 1.8616,
+    "ppl": 6.434
+  },
+  "tokens_per_s": 14.4,
+  "rouge_l": 0.3408,
+  "gen_n": 20,
+  "generations": "results/cpu_0.5b_pilot/prompt.gen.jsonl"
+}

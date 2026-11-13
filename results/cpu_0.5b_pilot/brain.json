@@ -1,6 +1,6 @@
 {
   "base": "Qwen/Qwen2.5-0.5B-Instruct",
-  "brain": "results/law.brain",
+  "brain": "results/cpu_0.5b_pilot/law.brain",
   "lora": null,
   "alpha": 1.0,
   "gate": 1.0,
@@ -19,5 +19,7 @@
     "delta": 0.0855
   },
   "tokens_per_s": 11.3,
-  "generations": "results/brain.gen.jsonl"
+  "generations": "results/cpu_0.5b_pilot/brain.gen.jsonl",
+  "rouge_l": 0.3943,
+  "gen_n": 20
 }

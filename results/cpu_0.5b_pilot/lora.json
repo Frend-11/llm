@@ -1,0 +1,21 @@
+{
+  "base": "Qwen/Qwen2.5-0.5B-Instruct",
+  "brain": null,
+  "lora": "results/cpu_0.5b_pilot/law.lora",
+  "alpha": 1.0,
+  "gate": 1.0,
+  "system": null,
+  "extra_params_M": 7.569,
+  "role": {
+    "loss": 1.5152,
+    "ppl": 4.551
+  },
+  "general": {
+    "loss": 1.8623,
+    "ppl": 6.439
+  },
+  "tokens_per_s": 9.9,
+  "rouge_l": 0.3532,
+  "gen_n": 20,
+  "generations": "results/cpu_0.5b_pilot/lora.gen.jsonl"
+}
