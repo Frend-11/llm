@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Qwen3.5 全流程：扩充数据 → 在最小的模型上两轮扫描（验证集）→ 用选出的配置在各个规模上做主对比（测试集）。
+# 扫描都是单变量的：第一轮在默认结构上分别只改学习率、只改写入缩放；第二轮逐项关闭一个部件。
+# 更细的单变量系列（层数、宽度、种子、样本数等）见 scripts/ofat_q35.sh。
 # 中断后重新运行会续跑；日志在 results/run_q35.log。
 #   12GB 显卡:  bash scripts/run_q35.sh
 #   80GB 显卡:  MODELS="Qwen/Qwen3.5-0.8B Qwen/Qwen3.5-2B Qwen/Qwen3.5-4B Qwen/Qwen3.5-9B Qwen/Qwen3.5-27B" bash scripts/run_q35.sh
@@ -33,19 +35,16 @@ need_cuda || exit 1
   t l_lr1e-3        lora --lora-r 0 --lr 1e-3
   B1=$("$PYTHON" scripts/pick_best.py "$SW" b_) || exit 1
 
-  echo "---- 扫描第二轮：在最优学习率下比较结构，并做通路消融（消融只报告，不参与选择） ----"
+  echo "---- 扫描第二轮：在第一轮选出的配置上逐项关闭一个部件（单变量；只报告，不参与选择） ----"
   # shellcheck disable=SC2086
   {
-    t b_t12_d160  brain $B1 --n-taps 12 --d-side 160
-    t b_t24_d96   brain $B1 --n-taps 24 --d-side 96
     t a_noinject  brain $B1 --no-inject
     t a_nologit   brain $B1 --no-logit
     t a_nonorm    brain $B1 --no-norm-in
   }
-  t a_old_lr1e-4 brain --lr 1e-4 --abs-write --write-scale 1 --no-norm-in
   "$PYTHON" scripts/summarize.py "$SW" | tee "$SW/summary.md"
-  BRAIN_ARGS=$("$PYTHON" scripts/pick_best.py "$SW" b_) || exit 1
-  LORA_ARGS=$("$PYTHON" scripts/pick_best.py "$SW" l_) || exit 1
+  BRAIN_ARGS=${BRAIN_ARGS:-$B1}                # 主对比用第一轮选出的配置；也可以从外面指定
+  LORA_ARGS=${LORA_ARGS:-$("$PYTHON" scripts/pick_best.py "$SW" l_)} || exit 1
   echo "第二大脑用: $BRAIN_ARGS | LoRA 用: $LORA_ARGS"
 
   echo "---- 主对比：各个规模，完整训练集，测试集评测 ----"
